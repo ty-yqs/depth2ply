@@ -39,41 +39,34 @@ jobs:
         run: |
           choco install -y git zip unzip cmake
 
-      - name: Clone vcpkg
-        run: git clone --depth=1 https://github.com/microsoft/vcpkg.git vcpkg
-
-      - name: Bootstrap vcpkg
+      - name: Install OpenCV on Linux
+        if: matrix.os == 'ubuntu-latest'
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            .\vcpkg\bootstrap-vcpkg.bat
-          else
-            ./vcpkg/bootstrap-vcpkg.sh
-          fi
-        shell: bash
+          sudo apt-get update
+          sudo apt-get install -y libopencv-dev pkg-config
 
-      - name: Cache vcpkg installed
-        uses: actions/cache@v4
-        with:
-          path: vcpkg/installed
-          key: ${{ runner.os }}-vcpkg-${{ matrix.triplet }}-v1
-
-      - name: Install OpenCV via vcpkg
-        env:
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      - name: Install OpenCV on macOS
+        if: startsWith(matrix.os, 'macos')
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            .\vcpkg\vcpkg install opencv:${{ matrix.triplet }}
-          else
-            ./vcpkg/vcpkg install opencv:${{ matrix.triplet }}
-          fi
-        shell: bash
+          brew update || true
+          brew install opencv
+
+      - name: Install OpenCV on Windows (vcpkg)
+        if: matrix.os == 'windows-latest'
+        run: |
+          git clone --depth=1 https://github.com/microsoft/vcpkg.git vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg install opencv:${{ matrix.triplet }}
+        shell: powershell
 
       - name: Configure CMake
-        env:
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           mkdir -p build
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          else
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          fi
         shell: bash
 
       - name: Build
