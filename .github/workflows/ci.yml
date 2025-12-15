@@ -1,0 +1,87 @@
+name: CI Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            triplet: x64-linux
+          - os: macos-latest
+            triplet: x64-osx
+          - os: windows-latest
+            triplet: x64-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup tools (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git curl zip unzip cmake
+
+      - name: Setup tools (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew update || true
+          brew install git curl zip unzip cmake || true
+
+      - name: Setup tools (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          choco install -y git zip unzip cmake
+
+      - name: Clone vcpkg
+        run: git clone --depth=1 https://github.com/microsoft/vcpkg.git vcpkg
+
+      - name: Bootstrap vcpkg
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            .\vcpkg\bootstrap-vcpkg.bat
+          else
+            ./vcpkg/bootstrap-vcpkg.sh
+          fi
+        shell: bash
+
+      - name: Cache vcpkg installed
+        uses: actions/cache@v4
+        with:
+          path: vcpkg/installed
+          key: ${{ runner.os }}-vcpkg-${{ matrix.triplet }}-v1
+
+      - name: Install OpenCV via vcpkg
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            .\vcpkg\vcpkg install opencv:${{ matrix.triplet }}
+          else
+            ./vcpkg/vcpkg install opencv:${{ matrix.triplet }}
+          fi
+        shell: bash
+
+      - name: Configure CMake
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          mkdir -p build
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+        shell: bash
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.os }}
+          path: build || true

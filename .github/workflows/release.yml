@@ -1,0 +1,132 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            triplet: x64-linux
+            exe: depth2ply
+            zip: depth2ply-linux-x64.zip
+          - name: macos-x64
+            os: macos-latest
+            triplet: x64-osx
+            exe: depth2ply
+            zip: depth2ply-macos-x64.zip
+          - name: macos-arm64
+            os: macos-latest
+            triplet: arm64-osx
+            exe: depth2ply
+            zip: depth2ply-macos-arm64.zip
+          - name: windows-x64
+            os: windows-latest
+            triplet: x64-windows
+            exe: depth2ply.exe
+            zip: depth2ply-windows-x64.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install basic tools
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git curl zip unzip
+
+      - name: Install basic tools (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew update || true
+          brew install git curl zip unzip
+
+      - name: Install basic tools (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          choco install -y zip unzip git
+
+      - name: Setup vcpkg
+        run: |
+          git clone --depth=1 https://github.com/microsoft/vcpkg.git vcpkg
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            .\vcpkg\bootstrap-vcpkg.bat
+          else
+            ./vcpkg/bootstrap-vcpkg.sh
+          fi
+        shell: bash
+
+      - name: Install OpenCV via vcpkg
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
+        run: |
+          export VCPKG_ROOT=${VCPKG_ROOT}
+          ${VCPKG_ROOT}/vcpkg install opencv:${{ matrix.triplet }}
+
+      - name: Configure CMake
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          mkdir -p build
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
+            ${EXTRA_CMAKE_ARGS}
+
+      - name: Build
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Package executable
+        run: |
+          mkdir -p artifacts
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp build/Release/${{ matrix.exe }} artifacts/${{ matrix.exe }} || cp build/${{ matrix.exe }} artifacts/${{ matrix.exe }} || true
+          else
+            cp build/${{ matrix.exe }} artifacts/${{ matrix.exe }} || true
+          fi
+          cd artifacts
+          zip -r ../${{ matrix.zip }} ./*
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.zip }}
+          path: ${{ matrix.zip }}
+
+  create_release:
+    name: Create GitHub Release and upload assets
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
